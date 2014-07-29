@@ -329,8 +329,6 @@ def interpret_svg_textext(textEl, texDoc):
 	texcode = textEl.attrib[TEXTEXT_PREFIX+'text'].encode('utf-8').decode('unicode_escape')
 	xform = compute_svg_transform(textEl)
 
-	print(textEl)
-	print(textEl.attrib['id'])
 	placedElements = textEl.xpath(r'.//svg:use', namespaces=INKSVG_NAMESPACES)
 	if len(placedElements):
 		minX = 1e20
@@ -338,7 +336,6 @@ def interpret_svg_textext(textEl, texDoc):
 		for el in placedElements:
 			elPos = (float(el.attrib['x']), float(el.attrib['y']))
 			elPos = xform.applyTo(elPos)
-			print('use @', elPos)
 			x, y = elPos
 			if x < minX:
 				minX = x
