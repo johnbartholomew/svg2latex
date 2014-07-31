@@ -119,7 +119,7 @@ class AffineTransform:
 		# TODO do a real matrix decomposition here!
 		return math.degrees(math.atan2(m21,m11))
 
-RX_TRANSFORM = re.compile(r'^\s*(\w+)\(([0-9,\s\.-]*)\)\s*$')
+RX_TRANSFORM = re.compile(r'^\s*(\w+)\(([0-9,\s\.Ee+-]*)\)\s*$')
 
 def svg_parse_transform(attribute):
 	m = RX_TRANSFORM.match(attribute)
