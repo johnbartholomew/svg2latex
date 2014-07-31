@@ -5,6 +5,7 @@ import lxml.etree as etree
 import subprocess
 import tempfile
 import textwrap
+import argparse
 import string
 import codecs
 import shutil
@@ -320,9 +321,16 @@ def execute_latex(texname, command='pdflatex'):
 	subprocess.check_call(cmd, stdin=subprocess.DEVNULL)
 
 def main():
-	# TODO use an argument parser and take the input filename(s) as arguments
-	basename = 'test-figure'
-	xmldoc = etree.parse('test-figure.svg')
+	parser = argparse.ArgumentParser(description='Convert an SVG containing LaTeX elements into a PDF')
+	parser.add_argument('-o', '--output', dest='outpath')
+	parser.add_argument('inpath', metavar='INPUT')
+	args = parser.parse_args()
+
+	basename, _ = os.path.splitext(args.inpath)
+	inpath = args.inpath
+	outpath = args.outpath if args.outpath is not None else basename + '.pdf'
+
+	xmldoc = etree.parse(args.inpath)
 	texpic = extract_text_to_texpic(xmldoc.getroot())
 
 	original_cwd = os.getcwd()
@@ -333,7 +341,7 @@ def main():
 			with open('tex_wrapper.tex', mode='w', encoding='utf-8') as texfile:
 				texpic.emit_standalone(texfile, background='graphic_only.pdf')
 			execute_latex('tex_wrapper.tex')
-			shutil.move('tex_wrapper.pdf', os.path.join(original_cwd, basename + '.pdf'))
+			shutil.move('tex_wrapper.pdf', os.path.join(original_cwd, outpath))
 	finally:
 		os.chdir(original_cwd)
 
