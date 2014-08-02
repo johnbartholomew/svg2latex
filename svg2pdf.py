@@ -316,15 +316,33 @@ def extract_text_to_texpic(svgroot):
 
 	return pic
 
-def generate_pdf_from_svg(svgdata, svgname, pdfname):
+class WorkingDirectory:
+	def __init__(self, new_dir):
+		self._new_dir = new_dir
+		self._cwd = None
+
+	def __enter__(self):
+		self._cwd = os.getcwd()
+		os.chdir(self._new_dir)
+		return self
+
+	def __exit__(self, exc_type, exc_value, traceback):
+		os.chdir(self._cwd)
+
+def generate_pdf_from_svg(svgdata, svgname, pdfname, base_dir=None):
+	svgpath = os.path.abspath(svgname)
+	pdfpath = os.path.abspath(pdfname)
 	cmd = ['/usr/bin/inkscape',
 	       '--without-gui',
 	       '--export-area-page',
-	       '--export-pdf={}'.format(pdfname),
-	       svgname]
-	with open(svgname, 'wb') as svgfile:
+	       '--export-pdf={}'.format(pdfpath),
+	       svgpath]
+	with open(svgpath, 'wb') as svgfile:
 		svgdata.write(svgfile, encoding='utf-8', xml_declaration=True)
-	subprocess.check_call(cmd, stdin=subprocess.DEVNULL)
+	with WorkingDirectory(base_dir):
+		print('cwd for inkscape:', os.getcwd())
+		print('inkscape command:', ' '.join(cmd))
+		subprocess.check_call(cmd, stdin=subprocess.DEVNULL)
 
 def execute_latex(texname, command='pdflatex'):
 	cmd = ['/usr/bin/' + command,
@@ -347,17 +365,15 @@ def main():
 	xmldoc = etree.parse(args.inpath)
 	texpic = extract_text_to_texpic(xmldoc.getroot())
 
-	original_cwd = os.getcwd()
-	try:
-		with tempfile.TemporaryDirectory(prefix='svg2pdf') as working_dir:
-			os.chdir(working_dir)
-			generate_pdf_from_svg(xmldoc, 'graphic_only.svg', 'graphic_only.pdf')
+	svgdir = os.path.abspath(os.path.dirname(inpath))
+
+	with tempfile.TemporaryDirectory(prefix='svg2pdf') as working_dir:
+		with WorkingDirectory(working_dir):
+			generate_pdf_from_svg(xmldoc, 'graphic_only.svg', 'graphic_only.pdf', base_dir=svgdir)
 			with open('tex_wrapper.tex', mode='w', encoding='utf-8') as texfile:
 				texpic.emit_standalone(texfile, background='graphic_only.pdf')
 			execute_latex('tex_wrapper.tex')
-			shutil.move('tex_wrapper.pdf', os.path.join(original_cwd, outpath))
-	finally:
-		os.chdir(original_cwd)
+		shutil.move(os.path.join(working_dir, 'tex_wrapper.pdf'), outpath)
 
 if __name__ == '__main__':
 	main()
