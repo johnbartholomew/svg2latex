@@ -44,6 +44,19 @@ def ns_attrib(attrib):
 	ns, _, attrib = attrib.partition(':')
 	return '{' + SVG_NSS[ns] + '}' + attrib
 
+class WorkingDirectory:
+	def __init__(self, new_dir):
+		self._new_dir = new_dir
+		self._cwd = None
+
+	def __enter__(self):
+		self._cwd = os.getcwd()
+		os.chdir(self._new_dir)
+		return self
+
+	def __exit__(self, exc_type, exc_value, traceback):
+		os.chdir(self._cwd)
+
 class AffineTransform:
 	def __init__(s, t=None, m=None):
 		s.t = (0.0, 0.0) if t is None else t
@@ -213,7 +226,6 @@ $extra_preamble
 \begingroup%
 \begin{picture}($picture_width,$picture_height)%
 ''')
-TEX_WRAPPER_BG = string.Template('\put(0,0){\includegraphics{$background_path}}')
 TEX_WRAPPER_NODE = string.Template(r'\put($x,$y){$texcode}')
 TEX_WRAPPER_TAIL = string.Template(r'''\end{picture}%
 \endgroup%
@@ -227,14 +239,11 @@ class TeXPicture:
 		self.nodes = []
 		self.extra_preamble = ''
 
-	def emit_standalone(self, out, background=None):
+	def emit_standalone(self, out):
 		out.write(TEX_WRAPPER_HEAD.substitute(
 			extra_preamble=self.extra_preamble,
 			picture_width=self.width,
 			picture_height=self.height))
-		if background is not None:
-			out.write(TEX_WRAPPER_BG.substitute(background_path=background))
-			out.write('%\n')
 		for node in self.nodes:
 			out.write(node.to_tex())
 			out.write('%\n')
@@ -247,7 +256,7 @@ class TeXPictureElement:
 
 	def to_tex(self):
 		return TEX_WRAPPER_NODE.substitute(
-				x=self.tex_pos[0], y=self.tex_pos[1], texcode=self.texcode)
+				x=round(self.tex_pos[0],3), y=round(self.tex_pos[1],3), texcode=self.texcode)
 
 def convert_tspans_to_tex(text_node):
 	# TODO make this much more comprehensive in understanding SVG text and styling
@@ -260,11 +269,33 @@ def convert_tspans_to_tex(text_node):
 def decode_escaped_string(text, encoding='utf-8'):
 	return codecs.escape_decode(text)[0].decode(encoding)
 
-def extract_text_to_texpic(svgroot):
-	pic = TeXPicture()
-	pic.width = svg_parse_length(svgroot.attrib['width'])
-	pic.height = svg_parse_length(svgroot.attrib['height'])
+def extract_images_to_texpic(svgroot, pic, svg_dir):
+	image_id = 1
+	for el in svgroot.xpath('//svg:image', namespaces=SVG_NSS):
+		node = TeXPictureElement()
 
+		width = svg_parse_length(el.attrib['width'])
+		height = svg_parse_length(el.attrib['height'])
+
+		node.xform = svg_find_accumulated_transform(el)
+		x = svg_parse_length(el.attrib.get('x','0'))
+		y = svg_parse_length(el.attrib.get('y','0'))
+		node.svg_pos = (x,y)
+		x,y = node.xform.applyTo(x,y)
+
+		path = el.attrib[ns_attrib('xlink:href')]
+		_, image_ext = os.path.splitext(path)
+		fullpath = os.path.join(svg_dir, path)
+		localpath = 'image{}{}'.format(image_id, image_ext)
+		shutil.copy(fullpath, localpath)
+
+		node.tex_pos = (x, pic.height - y - height)
+		node.texcode = '\\includegraphics[width={}in,height={}in]{{{}}}'.format(
+				width/90.0, height/90.0, localpath)
+		pic.nodes.append(node)
+		el.getparent().remove(el)
+
+def extract_text_to_texpic(svgroot, pic):
 	wrapper = textwrap.TextWrapper()
 	wrapper.expand_tabs = True
 	wrapper.width = 120
@@ -314,22 +345,29 @@ def extract_text_to_texpic(svgroot):
 	print('extra premable:')
 	print(pic.extra_preamble)
 
-	return pic
+def convert_svg_to_texpic(svgroot, svg_dir):
+	texpic = TeXPicture()
+	texpic.width = svg_parse_length(svgroot.attrib['width'])
+	texpic.height = svg_parse_length(svgroot.attrib['height'])
 
-class WorkingDirectory:
-	def __init__(self, new_dir):
-		self._new_dir = new_dir
-		self._cwd = None
+	# we totally ignore the correct layering of the SVG document,
+	# and just enforce a split of three layers that are sensible in "most" cases
 
-	def __enter__(self):
-		self._cwd = os.getcwd()
-		os.chdir(self._new_dir)
-		return self
+	# first we have any embedded images
+	extract_images_to_texpic(svgroot, texpic, svg_dir)
 
-	def __exit__(self, exc_type, exc_value, traceback):
-		os.chdir(self._cwd)
+	# then we have the SVG elements (lines, rects, paths, etc)
+	bgnode = TeXPictureElement()
+	bgnode.xform = AffineTransform()
+	bgnode.tex_pos = (0.0, 0.0)
+	bgnode.texcode = '\\put(0,0){{\\includegraphics{{{}}}}}'.format('graphic_only.pdf')
+	texpic.nodes.append(bgnode)
 
-def generate_pdf_from_svg(svgdata, svgname, pdfname, base_dir=None):
+	# then we have any text (labels)
+	extract_text_to_texpic(svgroot, texpic)
+	return texpic
+
+def generate_pdf_from_svg(svgdata, svgname, pdfname, svg_dir=None):
 	svgpath = os.path.abspath(svgname)
 	pdfpath = os.path.abspath(pdfname)
 	cmd = ['/usr/bin/inkscape',
@@ -339,14 +377,16 @@ def generate_pdf_from_svg(svgdata, svgname, pdfname, base_dir=None):
 	       svgpath]
 	with open(svgpath, 'wb') as svgfile:
 		svgdata.write(svgfile, encoding='utf-8', xml_declaration=True)
-	with WorkingDirectory(base_dir):
+	if svg_dir is None:
+		svg_dir = os.getcwd()
+	with WorkingDirectory(svg_dir):
 		print('cwd for inkscape:', os.getcwd())
 		print('inkscape command:', ' '.join(cmd))
 		subprocess.check_call(cmd, stdin=subprocess.DEVNULL)
 
 def execute_latex(texname, command='pdflatex'):
 	cmd = ['/usr/bin/' + command,
-	       '-interaction=batchmode',
+	       '-interaction=nonstopmode',
 	       '-halt-on-error',
 	       '-file-line-error',
 	       texname]
@@ -355,25 +395,39 @@ def execute_latex(texname, command='pdflatex'):
 def main():
 	parser = argparse.ArgumentParser(description='Convert an SVG containing LaTeX elements into a PDF')
 	parser.add_argument('-o', '--output', dest='outpath')
+	parser.add_argument('-k', '--keep', action='store_true')
 	parser.add_argument('inpath', metavar='INPUT')
 	args = parser.parse_args()
 
-	basename, _ = os.path.splitext(args.inpath)
-	inpath = args.inpath
-	outpath = args.outpath if args.outpath is not None else basename + '.pdf'
+	inpath = os.path.abspath(args.inpath)
+	inname, _ = os.path.splitext(args.inpath)
+	outpath = args.outpath if args.outpath is not None else inname + '.pdf'
 
-	xmldoc = etree.parse(args.inpath)
-	texpic = extract_text_to_texpic(xmldoc.getroot())
+	xmldoc = etree.parse(inpath)
+	svgroot = xmldoc.getroot()
 
-	svgdir = os.path.abspath(os.path.dirname(inpath))
+	svg_dir = os.path.abspath(os.path.dirname(inpath))
 
-	with tempfile.TemporaryDirectory(prefix='svg2pdf') as working_dir:
+	def do_svg2pdf(working_dir):
 		with WorkingDirectory(working_dir):
-			generate_pdf_from_svg(xmldoc, 'graphic_only.svg', 'graphic_only.pdf', base_dir=svgdir)
+			texpic = convert_svg_to_texpic(svgroot, svg_dir)
+			generate_pdf_from_svg(xmldoc, 'graphic_only.svg', 'graphic_only.pdf', svg_dir=svg_dir)
 			with open('tex_wrapper.tex', mode='w', encoding='utf-8') as texfile:
-				texpic.emit_standalone(texfile, background='graphic_only.pdf')
+				texpic.emit_standalone(texfile)
 			execute_latex('tex_wrapper.tex')
-		shutil.move(os.path.join(working_dir, 'tex_wrapper.pdf'), outpath)
+		tmp_outpath = os.path.join(working_dir, 'tex_wrapper.pdf')
+		if args.keep:
+			shutil.copy(tmp_outpath, outpath)
+		else:
+			shutil.move(tmp_outpath, outpath)
+
+	if args.keep:
+		working_dir = '/memtmp/svg2pdf'
+		os.makedirs(working_dir, exist_ok=True)
+		do_svg2pdf(working_dir)
+	else:
+		with tempfile.TemporaryDirectory(prefix='svg2pdf') as working_dir:
+			do_svg2pdf(working_dir)
 
 if __name__ == '__main__':
 	main()
