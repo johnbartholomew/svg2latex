@@ -225,11 +225,11 @@ class TeXPicture:
 		self.width = 0.0
 		self.height = 0.0
 		self.nodes = []
+		self.extra_preamble = ''
 
 	def emit_standalone(self, out, background=None):
-		# TODO extra_preamble shouldn't be hardcoded; it's supposed to be used for accumulated textext preamble code!
 		out.write(TEX_WRAPPER_HEAD.substitute(
-			extra_preamble='\\usepackage{amsmath,amsthm,amssymb,amsfonts}',
+			extra_preamble=self.extra_preamble,
 			picture_width=self.width,
 			picture_height=self.height))
 		if background is not None:
@@ -285,10 +285,14 @@ def extract_text_to_texpic(svgroot):
 		#pic.nodes.append(node)
 		el.getparent().remove(el)
 
+	preamble_files = set()
+
 	# extract textext nodes
 	for el in svgroot.xpath('//*[@textext:text]', namespaces=SVG_NSS):
 		node = TeXPictureElement()
 		textext = decode_escaped_string(el.attrib[ns_attrib('textext:text')])
+		preamble_src = decode_escaped_string(el.attrib[ns_attrib('textext:preamble')])
+		preamble_files.add(preamble_src)
 		node.texcode = (
 				'\\makebox(0,0)[lt]{\\begin{varwidth}{20in}%\n' +
 				textext +
@@ -299,6 +303,16 @@ def extract_text_to_texpic(svgroot):
 		node.tex_pos = (x, pic.height - y)
 		pic.nodes.append(node)
 		el.getparent().remove(el)
+
+	preamble = []
+	for path in preamble_files:
+		print('preamble from:', preamble_src)
+		with open(path, 'r', encoding='utf-8') as fl:
+			preamble.extend(fl.readlines())
+
+	pic.extra_preamble = ''.join(preamble)
+	print('extra premable:')
+	print(pic.extra_preamble)
 
 	return pic
 
@@ -316,7 +330,7 @@ def execute_latex(texname, command='pdflatex'):
 	cmd = ['/usr/bin/' + command,
 	       '-interaction=batchmode',
 	       '-halt-on-error',
-		   '-file-line-error',
+	       '-file-line-error',
 	       texname]
 	subprocess.check_call(cmd, stdin=subprocess.DEVNULL)
 
